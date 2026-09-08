@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+config.yaml
+secrets.env
+*.log
+.DS_Store
+*.egg-info/
+index01_adapter.egg-info/

@@ -1,0 +1,17 @@
+## git-secrets allowlist: token/env NAME matches only, no secret values (global patterns "[A-Z0-9]{20,}" and ".env" hit variable names and filenames)
+(^|.*/)\.gitignore:[0-9]+:.*\.venv/
+(^|.*/)\.gitallowed:[0-9]+:
+README\.md:[0-9]+:.*\.venv
+install\.sh:[0-9]+:.*\.venv
+adapter\.py:[0-9]+:.*env = os\.environ
+adapter\.py:[0-9]+:.*INDEX01_[A-Z_]+
+adapter\.py:[0-9]+:.*_get\("pebble", "signing_secret"
+adapter\.py:[0-9]+:.*_get\("pebble", "bearer_token"
+adapter\.py:[0-9]+:.*_get\("hermes", "route_secret"
+adapter\.py:[0-9]+:.*signing_secret: Optional
+adapter\.py:[0-9]+:.*bearer_token: Optional
+adapter\.py:[0-9]+:.*Bearer \{cfg\.bearer_token\}
+adapter\.py:[0-9]+:.*signing_secret is not None
+com\.user\.index01-adapter\.plist:[0-9]+:
+tests/test_adapter\.py:[0-9]+:.*(SIGNING_SECRET|BEARER_TOKEN|ROUTE_SECRET|secret=|Bearer|hermes_url)
+
