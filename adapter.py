@@ -590,9 +590,11 @@ async def dispatch(request: web.Request, ctx: _Ctx) -> web.Response:
             },
         )
         # Instant "received" ack in the target WhatsApp group (non-blocking,
-        # best-effort — a dead bridge must never fail a ring press).
+        # best-effort — a dead bridge must never fail a ring press). Shows the
+        # transcript so the group sees WHAT arrived, not just that something did.
         if cfg.ack_chat_id and 200 <= status < 300 and not is_test:
-            ack_text = f"{cfg.ack_emoji} Heard. Working on it…"
+            short = transcript if len(transcript) <= 200 else transcript[:197] + "…"
+            ack_text = f'{cfg.ack_emoji} _"{short}"_\n⏳ Working on it…'
             ack_session = getattr(ctx.forwarder, "_session", None)
             ack_task = asyncio.create_task(
                 whatsapp_ack.send_ack(
