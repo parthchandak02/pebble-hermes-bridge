@@ -35,6 +35,12 @@ hermes:
 listen:
   host: "127.0.0.1"
   port: 8645
+# Instant "🪨 Heard. Working on it…" ack in a WhatsApp group when a press arrives.
+# Uses the local Baileys bridge. Leave ack_chat_id empty to disable.
+whatsapp:
+  ack_chat_id: "${ACK_CHAT_ID:-}"
+  ack_bridge_port: 3000
+  ack_emoji: "🪨"
 log_level: "INFO"
 EOF
 chmod 600 config.yaml
