@@ -19,6 +19,7 @@ Design goals
 from __future__ import annotations
 
 import argparse
+import asyncio
 import hashlib
 import hmac
 import json
@@ -29,6 +30,11 @@ import time
 import uuid
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
+
+try:
+    from index01_adapter import whatsapp_ack  # package install
+except ImportError:
+    import whatsapp_ack  # running from the checkout directory
 
 import aiohttp
 import yaml
@@ -120,6 +126,10 @@ class Config:
     max_timestamp_age: int = 300             # seconds an X-Index-Timestamp may be old
     log_level: str = "INFO"
     request_timeout: float = 20.0            # outbound Hermes request timeout
+    # Instant "🪨 received" ack in the target WhatsApp group (via local Baileys bridge).
+    ack_chat_id: Optional[str] = None        # e.g. "1203...@g.us"; None disables
+    ack_bridge_port: int = 3000
+    ack_emoji: str = "🪨"
 
     @property
     def signing_enabled(self) -> bool:
@@ -174,6 +184,9 @@ def load_config() -> Config:
     )
     age = int(_get("pebble", "max_timestamp_age", default=300))
     log_level = env.get("INDEX01_LOG_LEVEL", _get("log_level", default="INFO"))
+    ack_chat = env.get("INDEX01_ACK_CHAT_ID", _get("whatsapp", "ack_chat_id"))
+    ack_port = int(_get("whatsapp", "ack_bridge_port", default=3000))
+    ack_emoji = env.get("INDEX01_ACK_EMOJI", _get("whatsapp", "ack_emoji", default="🪨"))
 
     missing = [k for k, v in (("route_secret", route), ("hermes_url", hermes_url)) if not v]
     if missing:
@@ -200,6 +213,9 @@ def load_config() -> Config:
         max_body_size=max_body,
         max_timestamp_age=age,
         log_level=log_level,
+        ack_chat_id=(str(ack_chat).strip() or None) if ack_chat else None,
+        ack_bridge_port=ack_port,
+        ack_emoji=str(ack_emoji),
     )
 
 
@@ -573,6 +589,18 @@ async def dispatch(request: web.Request, ctx: _Ctx) -> web.Response:
                 }
             },
         )
+        # Instant "received" ack in the target WhatsApp group (non-blocking,
+        # best-effort — a dead bridge must never fail a ring press).
+        if cfg.ack_chat_id and 200 <= status < 300 and not is_test:
+            ack_text = f"{cfg.ack_emoji} Heard. Working on it…"
+            ack_session = getattr(ctx.forwarder, "_session", None)
+            ack_task = asyncio.create_task(
+                whatsapp_ack.send_ack(
+                    ack_session, cfg.ack_chat_id, ack_text, bridge_port=cfg.ack_bridge_port
+                )
+            )
+            # Don't let a hung bridge delay the app's response.
+            ack_task.add_done_callback(lambda _t: None)
         return web.Response(status=status, text="")
     except AdapterError as exc:
         log.warning(
