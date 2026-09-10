@@ -171,3 +171,18 @@ def test_canonicalization_does_not_break_topic_routing() -> None:
     assert route_press("find the cheapest Franklin X40 pickleball paddle deal").label == "pickleball"
     assert route_press("when does my santa fe need an oil change").label == "car"
     assert route_press("remind me to buy milk tomorrow").label == "intake"
+
+
+def test_non_str_transcript_resolves_intake_not_raise() -> None:
+    """Reviewer nit: route_press(None) raised despite docstring."""
+    for bad in (None, 12345, ["x"]):
+        d = route_press(bad)  # type: ignore[arg-type]
+        assert d.label == "intake"
+
+
+def test_invalid_jid_shape_rejected(tmp_path) -> None:
+    """Reviewer nit: 'abc@g.us' passed validation."""
+    p = tmp_path / "routing.yaml"
+    p.write_text("intake_chat_id: abc@g.us\nroutes: {}\n")
+    with pytest.raises(ValueError, match="digits@g.us"):
+        load_routing(p)

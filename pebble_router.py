@@ -41,16 +41,16 @@ def load_routing(path: Path = ROUTING_FILE) -> dict:
     if not isinstance(raw, dict):
         raise ValueError("routing.yaml: top level must be a mapping")
     intake = raw.get("intake_chat_id")
-    if not isinstance(intake, str) or not intake.endswith("@g.us"):
-        raise ValueError("routing.yaml: intake_chat_id must be a group JID")
+    if not isinstance(intake, str) or not _valid_jid(intake):
+        raise ValueError("routing.yaml: intake_chat_id must be a group JID (digits@g.us)")
     routes = raw.get("routes") or {}
     if not isinstance(routes, dict):
         raise ValueError("routing.yaml: routes must be a mapping")
     for label, r in routes.items():
         if not isinstance(label, str) or not re.fullmatch(r"[a-z0-9_]+", label):
             raise ValueError(f"routing.yaml: bad label {label!r} (lowercase word chars only)")
-        if not isinstance(r, dict) or not str(r.get("chat_id", "")).endswith("@g.us"):
-            raise ValueError(f"routing.yaml: {label}.chat_id must be a group JID")
+        if not isinstance(r, dict) or not _valid_jid(str(r.get("chat_id", ""))):
+            raise ValueError(f"routing.yaml: {label}.chat_id must be a group JID (digits@g.us)")
         kws = r.get("keywords") or []
         if not isinstance(kws, list) or not all(isinstance(k, str) and k for k in kws):
             raise ValueError(f"routing.yaml: {label}.keywords must be a list of strings")
@@ -58,6 +58,11 @@ def load_routing(path: Path = ROUTING_FILE) -> dict:
     if not isinstance(gate, list) or not all(isinstance(g, str) and g for g in gate):
         raise ValueError("routing.yaml: sensitive_gate must be a list of strings")
     return raw
+
+
+def _valid_jid(jid: str) -> bool:
+    """Group JID: numeric WhatsApp id + @g.us ('abc@g.us' fails)."""
+    return bool(re.fullmatch(r"\d+@g\.us", jid))
 
 
 def _hits(text: str, terms: list[str]) -> list[str]:
@@ -99,7 +104,8 @@ def keyword_candidates(transcript: str, cfg: dict) -> list[str]:
 
 def route_press(transcript: str, *, llm_label: Optional[str] = None,
                 llm_confidence: float = 0.0, routing_path: Path = ROUTING_FILE) -> RouteDecision:
-    """Full routing decision for one press. NEVER raises; errors resolve to intake.
+    """Full routing decision for one press. NEVER raises on string transcript input;
+    a non-str transcript resolves to intake. Errors resolve to intake.
 
     Order of authority (per research synthesis):
       1. sensitive gate -> intake (always)
@@ -109,6 +115,10 @@ def route_press(transcript: str, *, llm_label: Optional[str] = None,
     """
     intake = RouteDecision(label="intake", chat_id="",
                            reason="default intake", candidates=[], confidence=0.0)
+    if not isinstance(transcript, str):
+        log.warning("route_press got non-str transcript (%s) - intake",
+                    type(transcript).__name__)
+        return intake
     try:
         cfg = load_routing(routing_path)
         intake.chat_id = cfg["intake_chat_id"]
