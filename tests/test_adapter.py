@@ -797,3 +797,24 @@ async def test_press_acks_intake_single() -> None:
         await client.close()
 
 
+
+
+@pytest.mark.asyncio
+async def test_gate_fails_closed_on_bad_routing_yaml(monkeypatch) -> None:
+    """Reviewer finding: routing.yaml failure silently disabled the sensitive gate."""
+    import adapter as adapt
+    fwd = FakeForwarder(status=202)
+    body, headers = valid_body(transcript="remind me to water the plants", ts="1700000300")
+    client = await make_client(make_config(), fwd, clock=lambda: 1700000300.0)
+    try:
+        import pebble_router
+        def boom(*a, **k):
+            raise RuntimeError("yaml broken")
+        monkeypatch.setattr(pebble_router, "load_routing", boom)
+        resp = await client.post("/anything", data=body, headers=headers)
+        assert resp.status == 202
+        payload, _ = fwd.calls[0]
+        assert payload["sensitive"] is True  # fail closed, not open
+        assert "gate-unavailable" in payload["routing_reason"]
+    finally:
+        await client.close()

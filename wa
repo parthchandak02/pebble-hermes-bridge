@@ -43,7 +43,9 @@ def cmd_groups() -> int:
     return 0
 
 
-def cmd_send(alias: str, text: str) -> int:
+def cmd_send(alias: str, text: str = "", file_path: str | None = None) -> int:
+    if file_path:
+        text = Path(file_path).read_text(encoding="utf-8")
     groups = load_groups()
     info = groups.get(alias)
     if info is None:
@@ -73,8 +75,19 @@ def main(argv: list[str]) -> int:
     cmd = argv[1]
     if cmd == "groups":
         return cmd_groups()
-    if cmd == "send" and len(argv) >= 4:
-        return cmd_send(argv[2], " ".join(argv[3:]))
+    if cmd == "send" and len(argv) >= 3:
+        alias = argv[2]
+        rest = argv[3:]
+        if rest and rest[0] == "--file":
+            if len(rest) < 2:
+                print("error: --file needs a path (use - for stdin)", file=sys.stderr)
+                return 2
+            if rest[1] == "-":
+                return cmd_send(alias, sys.stdin.read())
+            return cmd_send(alias, file_path=rest[1])
+        if rest:
+            return cmd_send(alias, " ".join(rest))
+        return cmd_send(alias, sys.stdin.read())  # no text arg -> stdin
     print(__doc__, file=sys.stderr)
     return 2
 

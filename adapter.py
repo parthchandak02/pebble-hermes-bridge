@@ -579,10 +579,11 @@ async def dispatch(request: web.Request, ctx: _Ctx) -> web.Response:
         try:
             rcfg = load_routing()
             sens = sensitive_hit(transcript, rcfg)
-            intake_chat_id = rcfg["intake_chat_id"]
         except Exception:
-            log.warning("routing.yaml unavailable - proceeding without gate")
-            sens, intake_chat_id = [], None
+            # Fail CLOSED: an unreadable gate must never silently disable the privacy
+            # guardrail. Flag sensitive so the session errs toward intake.
+            log.exception("routing.yaml unreadable - gate fails closed (sensitive=True)")
+            sens = ["gate-unavailable"]
         payload = {
             "transcript": transcript,
             "recordedAt": recorded_at,
