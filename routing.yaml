@@ -1,0 +1,54 @@
+# Pebble press routing - read FRESH on every press, never cached.
+# Labels map to WhatsApp groups. The classifier may ONLY return a label from
+# this file; label->JID resolution happens in code (no model-supplied JIDs).
+# Fail-closed: anything unrecognized, low-confidence, or sensitive stays in intake.
+
+intake_chat_id: "000000000000000000@g.us"
+
+routes:
+  car:
+    chat_id: "000000000000000000@g.us"   # Hyundai Santa Fe agent group
+    keywords: [hyundai, santa fe, santafe, car, vehicle, tire, tyre, oil change, service,
+               dealership, dealer, stevens creek, san bruno, capitol hyundai, vin,
+               bluelink, windshield, brake, hybrid, ev charge, mileage, odometer]
+  pickleball:
+    chat_id: "000000000000000000@g.us"   # Pickleball
+    keywords: [pickleball, paddle, franklin, x40, monarch, dink, volley, kitchen line,
+               tournament, bracket, pball, usapa, dupr]
+  finance:
+    chat_id: "000000000000000000@g.us"   # Finances Manager
+    keywords: [stock, stocks, etf, invest, investing, portfolio, budget, brokerage,
+               dividend, spy, voo, qqq, roth, ira, 401k, hysa, savings rate, net worth,
+               options, shares]
+  taxes:
+    chat_id: "000000000000000000@g.us"   # Taxes 2026
+    keywords: [tax, taxes, irs, "w2", "w-2", "1040", deduction, refund, fica, capital gains,
+               turbotax, fresco, filing, estimated payment, quarter tax]
+
+# Hard-sensitive hits force intake REGARDLESS of any keyword or model judgment.
+sensitive_gate:
+  - password
+  - passphrase
+  - api key
+  - apikey
+  - seed phrase
+  - seedphrase
+  - social security
+  - ssn
+  - account number
+  - routing number
+  - wire
+  - blood pressure
+  - cholesterol
+  - prescription
+  - medication
+  - insulin
+  - glucose
+  - biopsy
+  - mri
+  - doctor
+  - dermatologist
+  - cardiologist
+  - symptoms
+  - diagnosis
+  - rash

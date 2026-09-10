@@ -6,6 +6,7 @@ fake Hermes target for the outbound round-trip. Hermes platform at 8644 is never
 contacted.
 """
 
+import asyncio
 import hashlib
 import hmac
 import inspect
@@ -306,13 +307,15 @@ async def test_valid_request_forwards_expected_payload() -> None:
         assert len(fwd.calls) == 1
         payload, delivery = fwd.calls[0]
         assert delivery == "fileId-42"
-        assert payload == {
-            "transcript": "remind me to water plants",
-            "recordedAt": 1700000000500,
-            "trigger": "single-click-hold",
-            "delivery": "fileId-42",
-            "isTest": False,
-        }
+        assert payload["transcript"] == "remind me to water plants"
+        assert payload["recordedAt"] == 1700000000500
+        assert payload["trigger"] == "single-click-hold"
+        assert payload["delivery"] == "fileId-42"
+        assert payload["isTest"] is False
+        # Router always resolves a destination (fail-closed default: intake).
+        assert payload["routing_label"] == "intake"
+        assert payload["routing_chat_id"].endswith("@g.us")
+        assert isinstance(payload["routing_reason"], str)
     finally:
         await client.close()
 
@@ -727,3 +730,73 @@ def test_load_config_missing_required_raises(tmp_path, monkeypatch) -> None:
     monkeypatch.delenv("INDEX01_HERMES_URL", raising=False)
     with pytest.raises(ValueError):
         load_config()
+
+# --- topic routing (Option C) -------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_keyword_press_sets_routing_fields() -> None:
+    fwd = FakeForwarder(status=202)
+    body, headers = valid_body(transcript="when does my santa fe need an oil change", ts="1700000300")
+    client = await make_client(make_config(), fwd, clock=lambda: 1700000300.0)
+    try:
+        resp = await client.post("/anything", data=body, headers=headers)
+        assert resp.status == 202
+        payload, _ = fwd.calls[0]
+        assert payload["routing_label"] == "car"
+        assert payload["routing_chat_id"].endswith("@g.us")  # resolved JID from routing.yaml
+        assert "keywords" in payload["routing_reason"]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_sensitive_press_forced_intake() -> None:
+    fwd = FakeForwarder(status=202)
+    body, headers = valid_body(transcript="check my portfolio and my blood pressure results", ts="1700000300")
+    client = await make_client(make_config(), fwd, clock=lambda: 1700000300.0)
+    try:
+        resp = await client.post("/anything", data=body, headers=headers)
+        assert resp.status == 202
+        payload, _ = fwd.calls[0]
+        assert payload["routing_label"] == "intake"
+        assert "blood pressure" in payload["routing_reason"]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_routed_press_acks_both_groups() -> None:
+    """Routed press: intake gets receipt+routing line, target group gets heads-up."""
+    sent: list[tuple[str, str]] = []
+
+    class AckSpyForwarder(FakeForwarder):
+        pass
+
+    fwd = FakeForwarder(status=202)
+    body, headers = valid_body(transcript="santa fe oil change question", ts="1700000300")
+    cfg = make_config(ack_chat_id="120363409906896570@g.us")  # ack to intake
+    client = await make_client(cfg, fwd, clock=lambda: 1700000300.0)
+    try:
+        import whatsapp_ack as wack
+        async def spy(session, chat_id, text, bridge_port=3000):
+            sent.append((chat_id, text))
+            return True
+        orig_send = wack.send_ack
+        wack.send_ack = spy
+        import adapter as adapt
+        orig_module = adapt.whatsapp_ack
+        adapt.whatsapp_ack = wack
+        resp = await client.post("/anything", data=body, headers=headers)
+        await asyncio.sleep(0.05)
+        assert resp.status == 202
+        assert len(sent) == 2
+        chat_ids = {c for c, _ in sent}
+        assert cfg.ack_chat_id in chat_ids
+        texts = {c: tx for c, tx in sent}
+        assert "car" in texts[cfg.ack_chat_id]  # intake receipt carries the routing notice
+        other = [tx for c, tx in sent if c != cfg.ack_chat_id][0]
+        assert "santa fe" in other.lower()  # target heads-up shows the transcript
+        adapt.whatsapp_ack = orig_module
+        wack.send_ack = orig_send
+    finally:
+        await client.close()

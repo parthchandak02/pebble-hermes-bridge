@@ -570,13 +570,32 @@ async def dispatch(request: web.Request, ctx: _Ctx) -> web.Response:
         except (TypeError, ValueError) as exc:
             raise BadRequest("recordedAt is missing or not an epoch-ms integer") from exc
 
+        # Topic routing (fail-closed, deterministic keyword pass; see pebble_router.py).
+        # The resolved chat_id rides IN the payload so the gateway's deliver_extra
+        # template ("{routing_chat_id}") delivers the agent's response to the right group.
+        from pebble_router import route_press
+
+        decision = route_press(transcript)
         payload = {
             "transcript": transcript,
             "recordedAt": recorded_at,
             "trigger": trigger,
             "delivery": delivery,
             "isTest": is_test,
+            "routing_label": decision.label,
+            "routing_chat_id": decision.chat_id,
+            "routing_reason": decision.reason,
         }
+        log.info(
+            "routed press",
+            extra={"json_fields": {
+                "delivery": delivery,
+                "routing_label": decision.label,
+                "routing_chat_id": decision.chat_id,
+                "routing_reason": decision.reason,
+                "sensitive": decision.sensitive,
+            }},
+        )
 
         status = await ctx.forwarder.send(payload, delivery)
         log.info(
@@ -594,13 +613,36 @@ async def dispatch(request: web.Request, ctx: _Ctx) -> web.Response:
         # transcript so the group sees WHAT arrived, not just that something did.
         if cfg.ack_chat_id and 200 <= status < 300 and not is_test:
             short = transcript if len(transcript) <= 200 else transcript[:197] + "…"
-            ack_text = f'{cfg.ack_emoji} _"{short}"_\n⏳ Working on it…'
             ack_session = getattr(ctx.forwarder, "_session", None)
-            ack_task = asyncio.create_task(
-                whatsapp_ack.send_ack(
-                    ack_session, cfg.ack_chat_id, ack_text, bridge_port=cfg.ack_bridge_port
-                )
-            )
+
+            async def _send_ack(chat_id: str, text: str) -> None:
+                try:
+                    ok = await whatsapp_ack.send_ack(
+                        ack_session, chat_id, text, bridge_port=cfg.ack_bridge_port
+                    )
+                    log.info("ack sent", extra={"json_fields": {
+                        "chat_id": chat_id, "ok": bool(ok),
+                        "preview": text[:60],
+                    }})
+                except Exception:  # best-effort; never fail the press on an ack
+                    log.warning("ack send failed", extra={"json_fields": {"chat_id": chat_id}},
+                                exc_info=True)
+
+            # Receipt always lands in intake. If the press routes elsewhere, intake
+            # sees where it went and why, and the target group gets a heads-up.
+            if decision.label == "intake" or decision.chat_id == cfg.ack_chat_id:
+                ack_text = f'{cfg.ack_emoji} _"{short}"_\n⏳ Working on it…'
+                ack_task = asyncio.create_task(_send_ack(cfg.ack_chat_id, ack_text))
+            else:
+                route_line = f'➡️ *{decision.label}* group — {decision.reason}'
+                ack_task = asyncio.create_task(_send_ack(
+                    cfg.ack_chat_id,
+                    f'{cfg.ack_emoji} _"{short}"_\n{route_line}\n⏳ Working on it…',
+                ))
+                heads_up = asyncio.create_task(_send_ack(
+                    decision.chat_id,
+                    f'{cfg.ack_emoji} _"{short}"_\n⏳ Working on it…',
+                ))
             # Don't let a hung bridge delay the app's response.
             ack_task.add_done_callback(lambda _t: None)
         return web.Response(status=status, text="")
