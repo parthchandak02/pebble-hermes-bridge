@@ -1,0 +1,83 @@
+#!/usr/bin/env python3
+"""wa - send WhatsApp messages to a named group (used by Hermes sessions for cross-posting).
+
+Groups and their JIDs live in routing.yaml next to this script (read fresh every call,
+edit takes effect immediately). The LLM session calls:
+    wa groups              -> list alias + description table
+    wa send <alias> <text> -> post text to that group via the local bridge
+JIDs never need to appear in prompts; the LLM only sees aliases.
+
+Security: aliases are the ONLY handle exposed to the model. A transcript cannot add,
+change, or resolve a JID - this file is the sole label->JID map.
+"""
+import sys
+import json
+import urllib.request
+from pathlib import Path
+
+import yaml
+
+ROUTING_FILE = Path(__file__).resolve().parent / "index01-adapter" / "routing.yaml"
+BRIDGE_PORT = 3000  # whatsapp bridge (node) on localhost
+
+
+def load_groups() -> dict:
+    raw = yaml.safe_load(ROUTING_FILE.read_text())
+    routes = raw.get("routes") or {}
+    out = {}
+    for label, r in routes.items():
+        if not isinstance(r, dict):
+            continue
+        out[label] = {
+            "chat_id": r.get("chat_id", ""),
+            "description": r.get("description", ""),
+        }
+    return out
+
+
+def cmd_groups() -> int:
+    groups = load_groups()
+    for label, info in groups.items():
+        desc = info.get("description") or ""
+        print(f"{label:14} {desc}")
+    return 0
+
+
+def cmd_send(alias: str, text: str) -> int:
+    groups = load_groups()
+    info = groups.get(alias)
+    if info is None:
+        print(f"error: unknown group '{alias}'. Run `wa groups`.", file=sys.stderr)
+        return 1
+    chat_id = info.get("chat_id", "")
+    if not chat_id.endswith("@g.us"):
+        print(f"error: group '{alias}' has no valid chat_id", file=sys.stderr)
+        return 1
+    payload = json.dumps({"chatId": chat_id, "message": text}).encode()
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{BRIDGE_PORT}/send", data=payload, method="POST",
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        body = resp.read().decode()
+        if resp.status != 200:
+            print(f"error: bridge returned {resp.status}: {body}", file=sys.stderr)
+            return 1
+    print(f"sent to {alias}")
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) < 2:
+        print(__doc__, file=sys.stderr)
+        return 2
+    cmd = argv[1]
+    if cmd == "groups":
+        return cmd_groups()
+    if cmd == "send" and len(argv) >= 4:
+        return cmd_send(argv[2], " ".join(argv[3:]))
+    print(__doc__, file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
