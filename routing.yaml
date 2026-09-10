@@ -1,31 +1,25 @@
-# Pebble press routing - read FRESH on every press, never cached.
-# Labels map to WhatsApp groups. The classifier may ONLY return a label from
-# this file; label->JID resolution happens in code (no model-supplied JIDs).
-# Fail-closed: anything unrecognized, low-confidence, or sensitive stays in intake.
+# WhatsApp group directory for pebble presses + the `wa` CLI.
+# Read FRESH on every use - edits take effect immediately, no restart.
+# The LLM sees aliases + descriptions only; JIDs never enter a prompt.
 
 intake_chat_id: "000000000000000000@g.us"
 
 routes:
   car:
-    chat_id: "000000000000000000@g.us"   # Hyundai Santa Fe agent group
-    keywords: [hyundai, santa fe, santafe, car, vehicle, tire, tyre, oil change, service,
-               dealership, dealer, stevens creek, san bruno, capitol hyundai, vin,
-               bluelink, windshield, brake, hybrid, ev charge, mileage, odometer]
+    chat_id: "000000000000000000@g.us"
+    description: "Hyundai Santa Fe: service, tires, oil, dealership, Bluelink, car stuff"
   pickleball:
-    chat_id: "000000000000000000@g.us"   # Pickleball
-    keywords: [pickleball, paddle, franklin, x40, monarch, dink, volley, kitchen line,
-               tournament, bracket, pball, usapa, dupr]
+    chat_id: "000000000000000000@g.us"
+    description: "Pickleball: paddles (Franklin X40), tournaments, courts, gear deals"
   finance:
-    chat_id: "000000000000000000@g.us"   # Finances Manager
-    keywords: [stock, stocks, etf, invest, investing, portfolio, budget, brokerage,
-               dividend, spy, voo, qqq, roth, ira, 401k, hysa, savings rate, net worth,
-               options, shares]
+    chat_id: "000000000000000000@g.us"
+    description: "Money: stocks, ETFs, budget, brokerage, net worth (NOT tax filing)"
   taxes:
-    chat_id: "000000000000000000@g.us"   # Taxes 2026
-    keywords: [tax, taxes, irs, "w2", "w-2", "1040", deduction, refund, fica, capital gains,
-               turbotax, fresco, filing, estimated payment, quarter tax]
+    chat_id: "000000000000000000@g.us"
+    description: "Tax filing 2026: IRS, W-2, 1040, deductions, TurboTax, estimated payments"
 
-# Hard-sensitive hits force intake REGARDLESS of any keyword or model judgment.
+# Privacy guardrail (adapter-enforced, overrides everything): presses touching these
+# stay in intake and the agent answers there. The LLM cannot override this.
 sensitive_gate:
   - password
   - passphrase

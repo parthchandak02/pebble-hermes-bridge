@@ -312,10 +312,11 @@ async def test_valid_request_forwards_expected_payload() -> None:
         assert payload["trigger"] == "single-click-hold"
         assert payload["delivery"] == "fileId-42"
         assert payload["isTest"] is False
-        # Router always resolves a destination (fail-closed default: intake).
-        assert payload["routing_label"] == "intake"
-        assert payload["routing_chat_id"].endswith("@g.us")
-        assert isinstance(payload["routing_reason"], str)
+        # LLM-routing design: adapter only gates sensitive content; normal presses
+        # carry no routing fields - the session decides the group.
+        assert payload["sensitive"] is False
+        assert "routing_label" not in payload
+        assert "routing_chat_id" not in payload
     finally:
         await client.close()
 
@@ -742,9 +743,9 @@ async def test_keyword_press_sets_routing_fields() -> None:
         resp = await client.post("/anything", data=body, headers=headers)
         assert resp.status == 202
         payload, _ = fwd.calls[0]
-        assert payload["routing_label"] == "car"
-        assert payload["routing_chat_id"].endswith("@g.us")  # resolved JID from routing.yaml
-        assert "keywords" in payload["routing_reason"]
+        # car press is NOT sensitive; topic choice belongs to the LLM session
+        assert payload["sensitive"] is False
+        assert "routing_label" not in payload
     finally:
         await client.close()
 
@@ -758,23 +759,19 @@ async def test_sensitive_press_forced_intake() -> None:
         resp = await client.post("/anything", data=body, headers=headers)
         assert resp.status == 202
         payload, _ = fwd.calls[0]
-        assert payload["routing_label"] == "intake"
+        assert payload["sensitive"] is True
         assert "blood pressure" in payload["routing_reason"]
     finally:
         await client.close()
 
 
 @pytest.mark.asyncio
-async def test_routed_press_acks_both_groups() -> None:
-    """Routed press: intake gets receipt+routing line, target group gets heads-up."""
+async def test_press_acks_intake_single() -> None:
+    """Every press gets ONE intake receipt; the agent announces any cross-post itself."""
     sent: list[tuple[str, str]] = []
-
-    class AckSpyForwarder(FakeForwarder):
-        pass
-
     fwd = FakeForwarder(status=202)
     body, headers = valid_body(transcript="santa fe oil change question", ts="1700000300")
-    cfg = make_config(ack_chat_id="120363409906896570@g.us")  # ack to intake
+    cfg = make_config(ack_chat_id="120363409906896570@g.us")
     client = await make_client(cfg, fwd, clock=lambda: 1700000300.0)
     try:
         import whatsapp_ack as wack
@@ -789,14 +786,14 @@ async def test_routed_press_acks_both_groups() -> None:
         resp = await client.post("/anything", data=body, headers=headers)
         await asyncio.sleep(0.05)
         assert resp.status == 202
-        assert len(sent) == 2
-        chat_ids = {c for c, _ in sent}
-        assert cfg.ack_chat_id in chat_ids
-        texts = {c: tx for c, tx in sent}
-        assert "car" in texts[cfg.ack_chat_id]  # intake receipt carries the routing notice
-        other = [tx for c, tx in sent if c != cfg.ack_chat_id][0]
-        assert "santa fe" in other.lower()  # target heads-up shows the transcript
+        assert len(sent) == 1
+        chat_id, text = sent[0]
+        assert chat_id == cfg.ack_chat_id
+        assert "santa fe" in text.lower()
+        assert "⏳" in text
         adapt.whatsapp_ack = orig_module
         wack.send_ack = orig_send
     finally:
         await client.close()
+
+

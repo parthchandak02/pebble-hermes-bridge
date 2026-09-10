@@ -570,30 +570,34 @@ async def dispatch(request: web.Request, ctx: _Ctx) -> web.Response:
         except (TypeError, ValueError) as exc:
             raise BadRequest("recordedAt is missing or not an epoch-ms integer") from exc
 
-        # Topic routing (fail-closed, deterministic keyword pass; see pebble_router.py).
-        # The resolved chat_id rides IN the payload so the gateway's deliver_extra
-        # template ("{routing_chat_id}") delivers the agent's response to the right group.
-        from pebble_router import route_press
+        # Sensitive-content gate only (privacy guardrail; see pebble_router.py).
+        # Topic routing is the pebble session's job now: the agent classifies the press
+        # intelligently and cross-posts its answer with the `wa` CLI (aliases -> JIDs
+        # live in routing.yaml; the model never sees or chooses JIDs).
+        from pebble_router import load_routing, sensitive_hit
 
-        decision = route_press(transcript)
+        try:
+            rcfg = load_routing()
+            sens = sensitive_hit(transcript, rcfg)
+            intake_chat_id = rcfg["intake_chat_id"]
+        except Exception:
+            log.warning("routing.yaml unavailable - proceeding without gate")
+            sens, intake_chat_id = [], None
         payload = {
             "transcript": transcript,
             "recordedAt": recorded_at,
             "trigger": trigger,
             "delivery": delivery,
             "isTest": is_test,
-            "routing_label": decision.label,
-            "routing_chat_id": decision.chat_id,
-            "routing_reason": decision.reason,
+            "sensitive": bool(sens),
         }
+        if sens:
+            payload["routing_reason"] = f"sensitive content detected ({sens[0]}) - answer in intake"
         log.info(
-            "routed press",
+            "gated press",
             extra={"json_fields": {
                 "delivery": delivery,
-                "routing_label": decision.label,
-                "routing_chat_id": decision.chat_id,
-                "routing_reason": decision.reason,
-                "sensitive": decision.sensitive,
+                "sensitive": bool(sens),
             }},
         )
 
@@ -628,21 +632,10 @@ async def dispatch(request: web.Request, ctx: _Ctx) -> web.Response:
                     log.warning("ack send failed", extra={"json_fields": {"chat_id": chat_id}},
                                 exc_info=True)
 
-            # Receipt always lands in intake. If the press routes elsewhere, intake
-            # sees where it went and why, and the target group gets a heads-up.
-            if decision.label == "intake" or decision.chat_id == cfg.ack_chat_id:
-                ack_text = f'{cfg.ack_emoji} _"{short}"_\n⏳ Working on it…'
-                ack_task = asyncio.create_task(_send_ack(cfg.ack_chat_id, ack_text))
-            else:
-                route_line = f'➡️ *{decision.label}* group — {decision.reason}'
-                ack_task = asyncio.create_task(_send_ack(
-                    cfg.ack_chat_id,
-                    f'{cfg.ack_emoji} _"{short}"_\n{route_line}\n⏳ Working on it…',
-                ))
-                heads_up = asyncio.create_task(_send_ack(
-                    decision.chat_id,
-                    f'{cfg.ack_emoji} _"{short}"_\n⏳ Working on it…',
-                ))
+            # Receipt lands in intake; the agent itself announces where it routed
+            # the answer (it cross-posts via `wa send`).
+            ack_text = f'{cfg.ack_emoji} _"{short}"_\n⏳ Working on it…'
+            ack_task = asyncio.create_task(_send_ack(cfg.ack_chat_id, ack_text))
             # Don't let a hung bridge delay the app's response.
             ack_task.add_done_callback(lambda _t: None)
         return web.Response(status=status, text="")
