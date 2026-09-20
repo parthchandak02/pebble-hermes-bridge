@@ -14,4 +14,7 @@ adapter\.py:[0-9]+:.*Bearer \{cfg\.bearer_token\}
 adapter\.py:[0-9]+:.*signing_secret is not None
 com\.user\.index01-adapter\.plist:[0-9]+:
 tests/test_adapter\.py:[0-9]+:.*(SIGNING_SECRET|BEARER_TOKEN|ROUTE_SECRET|secret=|Bearer|hermes_url)
+tests/test_phone_action\.py:[0-9]+:.*(SIGNING_SECRET|secret=|hermes_url|route_secret)
+adapter\.py:[0-9]+:.*INDEX01_ACK_CALL_EMOJI
+adapter\.py:[0-9]+:.* = env\.get
 
