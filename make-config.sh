@@ -4,6 +4,9 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# Optional local values (ACK_CHAT_ID, ...) from the git-ignored .env.
+if [ -f .env ]; then set -a; . ./.env; set +a; fi
+
 # First run: generate fresh random secrets.
 if [ ! -f secrets.env ]; then
   {

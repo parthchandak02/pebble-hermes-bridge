@@ -13,6 +13,7 @@ The router NEVER touches routing.yaml. Config is an input, never an output.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,7 +23,14 @@ import yaml
 
 log = logging.getLogger("index01.router")
 
-ROUTING_FILE = Path(__file__).resolve().parent / "routing.yaml"
+_HERE = Path(__file__).resolve().parent
+# Real routing lives in routing.yaml (git-ignored, your own group JIDs). Override the
+# path with PEBBLE_ROUTING_FILE. If neither exists, the committed routing.example.yaml
+# still supplies the sensitive-word gate (its JIDs are fictional placeholders).
+ROUTING_FILE = Path(
+    os.environ.get("PEBBLE_ROUTING_FILE")
+    or (_HERE / "routing.yaml" if (_HERE / "routing.yaml").exists() else _HERE / "routing.example.yaml")
+)
 
 
 @dataclass

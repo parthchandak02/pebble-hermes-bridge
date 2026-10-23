@@ -112,6 +112,8 @@ Needs Python 3.11+, Tailscale and a running Hermes gateway with the webhook plat
 git clone https://github.com/parthchandak02/pebble-hermes-bridge.git
 cd pebble-hermes-bridge
 python3 -m venv .venv && .venv/bin/pip install -e .
+cp .env.example .env                      # your chat JIDs (gitignored)
+cp routing.example.yaml routing.yaml      # your groups + sensitive words (gitignored)
 ./make-config.sh                          # random secrets -> secrets.env + config.yaml (chmod 600)
 ./install.sh                              # launchd agent on 127.0.0.1:8645
 tailscale serve --bg http://127.0.0.1:8645
@@ -183,7 +185,8 @@ pebble_router.py           Sensitive-keyword gate and routing.yaml validation
 phone_action.py            Spoken-phrase action triggers (ntfy)
 whatsapp_ack.py            Instant ack via the local Baileys bridge
 wa                         CLI for agent sessions: list groups, send to a group by alias
-routing.yaml               Group aliases, descriptions and the sensitive-word list
+routing.example.yaml       Template for routing.yaml (gitignored): group aliases, JIDs, sensitive words
+.env.example               Template for .env (gitignored): delivery/ack chat JIDs, path overrides
 make-config.sh             Generates secrets.env and config.yaml
 install.sh                 Installs the launchd agent
 apply-hermes-config.py     Appends the webhook route to ~/.hermes/config.yaml, with a backup

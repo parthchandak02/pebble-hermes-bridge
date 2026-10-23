@@ -8,3 +8,5 @@ secrets.env
 .DS_Store
 *.egg-info/
 index01_adapter.egg-info/
+.env
+routing.yaml

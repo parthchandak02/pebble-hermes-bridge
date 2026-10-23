@@ -10,7 +10,8 @@ import pytest
 
 from pebble_router import route_press, load_routing, sensitive_hit, keyword_candidates
 
-REAL_ROUTING = Path(__file__).resolve().parent.parent / "routing.yaml"
+# The committed template (fictional JIDs); the real routing.yaml is git-ignored.
+EXAMPLE_ROUTING = Path(__file__).resolve().parent.parent / "routing.example.yaml"
 
 # Synthetic config WITH keywords for route_press semantics tests.
 KEYWORD_ROUTING = """
@@ -50,10 +51,10 @@ def kw_routing(tmp_path):
 
 # --- config validation -------------------------------------------------------
 
-def test_real_routing_yaml_valid():
-    cfg = load_routing(REAL_ROUTING)
+def test_example_routing_yaml_valid():
+    cfg = load_routing(EXAMPLE_ROUTING)
     assert cfg["intake_chat_id"].endswith("@g.us")
-    assert {"car", "pickleball", "finance", "taxes"} <= set(cfg["routes"])
+    assert {"household", "garden", "travel", "finance"} <= set(cfg["routes"])
     assert len(cfg["sensitive_gate"]) >= 10
 
 
@@ -86,7 +87,7 @@ def test_sensitive_forces_intake_despite_keywords(kw_routing):
 
 
 def test_sensitive_gate_terms():
-    cfg = load_routing(REAL_ROUTING)
+    cfg = load_routing(EXAMPLE_ROUTING)
     for phrase in ["my password is", "SSN", "blood pressure", "prescription refill"]:
         assert sensitive_hit(phrase, cfg), phrase
 
@@ -155,7 +156,7 @@ def test_spoken_config_edit_cannot_route_or_write(kw_routing):
     d = route_press(t, routing_path=kw_routing)
     assert d.label == "intake"
     # and the config file is untouched
-    assert "send all future messages" not in REAL_ROUTING.read_text()
+    assert "send all future messages" not in EXAMPLE_ROUTING.read_text()
 
 
 # --- fail-closed on config errors ---------------------------------------------
