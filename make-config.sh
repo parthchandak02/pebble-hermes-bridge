@@ -24,7 +24,7 @@ for var in PEBBLE_SIGNING_SECRET HERMES_ROUTE_SECRET PEBBLE_BEARER_TOKEN; do
   fi
 done
 cat > config.yaml << EOF
-# Secrets are NOT stored here: run.sh reads secrets.env and passes them as
+# Secrets are NOT stored here: run.py reads secrets.env and passes them as
 # INDEX01_SIGNING_SECRET / INDEX01_BEARER_TOKEN / INDEX01_ROUTE_SECRET.
 pebble:
   max_body_size: 5242880

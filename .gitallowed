@@ -20,6 +20,6 @@ adapter\.py:[0-9]+:.* = env\.get
 
 README\.md:[0-9]+:.*\.env
 make-config\.sh:[0-9]+:.*\.env
-run\.sh:[0-9]+:.*(secrets\.env|\.venv)
+run\.py:[0-9]+:.*(secrets\.env|SECRET|TOKEN|INDEX01_)
 ack_e2e_test\.py:[0-9]+:.*secrets\.env
 README\.md:[0-9]+:.*INDEX01_\*

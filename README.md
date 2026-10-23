@@ -167,7 +167,7 @@ Without `deliver`, the reply goes back over the webhook.
 - The adapter listens on loopback only. Expose it through Tailscale or another private
   tunnel, never a public port.
 - Secrets live only in `secrets.env` (chmod 600, gitignored) and are random per install.
-  `run.sh` passes them to the adapter as `INDEX01_*` env vars; `config.yaml` holds none.
+  `run.py` passes them to the adapter as `INDEX01_*` env vars; `config.yaml` holds none.
 - The transcript is untrusted. The route prompt marks it as data; pick `toolsets` with that in
   mind. `hermes-webhook` is the cautious choice, `hermes-whatsapp` widens the prompt-injection
   surface.
@@ -188,7 +188,7 @@ wa                         CLI for agent sessions: list groups, send to a group 
 routing.example.yaml       Template for routing.yaml (gitignored): group aliases, JIDs, sensitive words
 .env.example               Template for .env (gitignored): delivery/ack chat JIDs, path overrides
 make-config.sh             Generates secrets.env and config.yaml
-run.sh                     Launcher used by launchd: loads secrets.env, starts adapter.py
+run.py                     Launcher used by launchd: loads secrets.env, starts adapter.py
 install.sh                 Installs the launchd agent
 apply-hermes-config.py     Appends the webhook route to ~/.hermes/config.yaml, with a backup
 e2e_test.py                Signed end-to-end POST against a running adapter

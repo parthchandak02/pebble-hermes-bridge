@@ -6,8 +6,8 @@
     <string>com.user.index01-adapter</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/bin/bash</string>
-        <string>__INSTALL_DIR__/run.sh</string>
+        <string>__INSTALL_DIR__/.venv/bin/python</string>
+        <string>__INSTALL_DIR__/run.py</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
