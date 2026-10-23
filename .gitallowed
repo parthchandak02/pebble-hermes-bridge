@@ -18,3 +18,8 @@ tests/test_phone_action\.py:[0-9]+:.*(SIGNING_SECRET|secret=|hermes_url|route_se
 adapter\.py:[0-9]+:.*INDEX01_ACK_CALL_EMOJI
 adapter\.py:[0-9]+:.* = env\.get
 
+README\.md:[0-9]+:.*\.env
+make-config\.sh:[0-9]+:.*\.env
+run\.sh:[0-9]+:.*(secrets\.env|\.venv)
+ack_e2e_test\.py:[0-9]+:.*secrets\.env
+README\.md:[0-9]+:.*INDEX01_\*

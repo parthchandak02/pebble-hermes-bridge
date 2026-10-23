@@ -114,7 +114,7 @@ cd pebble-hermes-bridge
 python3 -m venv .venv && .venv/bin/pip install -e .
 cp .env.example .env                      # your chat JIDs (gitignored)
 cp routing.example.yaml routing.yaml      # your groups + sensitive words (gitignored)
-./make-config.sh                          # random secrets -> secrets.env + config.yaml (chmod 600)
+./make-config.sh                          # random secrets -> secrets.env; config.yaml without secrets (chmod 600)
 ./install.sh                              # launchd agent on 127.0.0.1:8645
 tailscale serve --bg http://127.0.0.1:8645
 .venv/bin/python e2e_test.py --text "hello from the ring"
@@ -125,7 +125,7 @@ Then add a `pebble` route to Hermes and point a ring gesture in the Pebble app a
 | Pebble app setting | Value |
 |---|---|
 | Webhook URL | `https://<machine>.<tailnet>.ts.net/webhooks/pebble` |
-| Headers | `Authorization: Bearer <bearer_token from config.yaml>` |
+| Headers | `Authorization: Bearer <PEBBLE_BEARER_TOKEN from secrets.env>` |
 | Send | Transcription (cloud transcription recommended) |
 | Sign requests | Off, or On with the same signing secret |
 
@@ -166,8 +166,8 @@ Without `deliver`, the reply goes back over the webhook.
 
 - The adapter listens on loopback only. Expose it through Tailscale or another private
   tunnel, never a public port.
-- Secrets live in `config.yaml` and `secrets.env` (chmod 600, gitignored) and are random per
-  install.
+- Secrets live only in `secrets.env` (chmod 600, gitignored) and are random per install.
+  `run.sh` passes them to the adapter as `INDEX01_*` env vars; `config.yaml` holds none.
 - The transcript is untrusted. The route prompt marks it as data; pick `toolsets` with that in
   mind. `hermes-webhook` is the cautious choice, `hermes-whatsapp` widens the prompt-injection
   surface.
@@ -188,9 +188,11 @@ wa                         CLI for agent sessions: list groups, send to a group 
 routing.example.yaml       Template for routing.yaml (gitignored): group aliases, JIDs, sensitive words
 .env.example               Template for .env (gitignored): delivery/ack chat JIDs, path overrides
 make-config.sh             Generates secrets.env and config.yaml
+run.sh                     Launcher used by launchd: loads secrets.env, starts adapter.py
 install.sh                 Installs the launchd agent
 apply-hermes-config.py     Appends the webhook route to ~/.hermes/config.yaml, with a backup
 e2e_test.py                Signed end-to-end POST against a running adapter
+ack_e2e_test.py            Live press (real ack to WhatsApp) + bridge-log check
 tests/                     pytest suite: 85 tests for parsing, auth, gate and actions
 ```
 

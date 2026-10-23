@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Generates config.yaml (+ secrets.env on first run) for the index01-adapter.
+# Generates config.yaml (no secrets) and secrets.env (first run only) for the index01-adapter.
 # Never prints secret values. Run from the repo checkout.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -23,17 +23,13 @@ for var in PEBBLE_SIGNING_SECRET HERMES_ROUTE_SECRET PEBBLE_BEARER_TOKEN; do
     echo "missing ${var} in secrets.env" >&2; exit 1
   fi
 done
-PEB="$(grep '^PEBBLE_SIGNING_SECRET=' secrets.env | cut -d= -f2)"
-HER="$(grep '^HERMES_ROUTE_SECRET=' secrets.env | cut -d= -f2)"
-BEAR="$(grep '^PEBBLE_BEARER_TOKEN=' secrets.env | cut -d= -f2)"
 cat > config.yaml << EOF
+# Secrets are NOT stored here: run.sh reads secrets.env and passes them as
+# INDEX01_SIGNING_SECRET / INDEX01_BEARER_TOKEN / INDEX01_ROUTE_SECRET.
 pebble:
-  signing_secret: "${PEB}"
-  bearer_token: "${BEAR}"
   max_body_size: 5242880
   max_timestamp_age: 300
 hermes:
-  route_secret: "${HER}"
   url: "http://127.0.0.1:8644/webhooks/pebble"
 listen:
   host: "127.0.0.1"
@@ -48,4 +44,4 @@ log_level: "INFO"
 EOF
 chmod 600 config.yaml
 echo "config.yaml written (600 perms)"
-echo "Route secret for the Hermes config.yaml route block: use the same value as hermes.route_secret (see apply-hermes-config.py)."
+echo "Route secret for the Hermes config.yaml route block: use HERMES_ROUTE_SECRET from secrets.env (see apply-hermes-config.py)."

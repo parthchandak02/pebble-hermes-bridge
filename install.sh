@@ -16,7 +16,9 @@ sed -e "s|__INSTALL_DIR__|${INSTALL_DIR}|g" -e "s|__HOME__|${HOME_DIR}|g" \
 launchctl unload ~/Library/LaunchAgents/com.user.index01-adapter.plist 2>/dev/null || true
 launchctl load ~/Library/LaunchAgents/com.user.index01-adapter.plist
 sleep 2
-if lsof -nP -iTCP:8645 -sTCP:LISTEN | grep -q LISTEN; then
+if curl -sf -o /dev/null -m 3 http://127.0.0.1:8645/healthz 2>/dev/null; then
+  echo "adapter up (healthz ok)"
+elif lsof -nP -iTCP:8645 -sTCP:LISTEN | grep -q LISTEN; then
   echo "adapter listening on 8645"
 else
   echo "WARNING: adapter not listening yet - check ~/Library/Logs/index01-adapter/err.log" >&2
