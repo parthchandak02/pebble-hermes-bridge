@@ -679,6 +679,9 @@ def build_app(cfg: ServerConfig, store: Optional[Store] = None):
 
     async def mcp_other(request: web.Request) -> web.Response:
         # Stateless JSON-only server: no SSE stream to open, no session to delete.
+        # Auth first, so an anonymous probe learns nothing beyond "needs a token".
+        if authenticate(cfg, request.headers.get("Authorization", "")) is None:
+            return web.Response(status=401, text="unauthorized", headers={"WWW-Authenticate": 'Bearer realm="taskbox"'})
         return web.Response(status=405, headers={"Allow": "POST"})
 
     async def healthz(_request: web.Request) -> web.Response:

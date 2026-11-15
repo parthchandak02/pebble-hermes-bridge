@@ -215,6 +215,7 @@ async def test_mcp_auth_and_origin(tmp_path) -> None:
     try:
         msg = {"jsonrpc": "2.0", "id": 1, "method": "ping"}
         assert (await client.post("/mcp", json=msg)).status == 401
+        assert (await client.get("/mcp")).status == 401
         assert (await client.post("/mcp", json=msg, headers={"Authorization": "Bearer wrong"})).status == 401
         r = await client.post("/mcp", json=msg, headers={"Authorization": f"Bearer {GROK_TOKEN}",
                                                          "Origin": "https://evil.example"})
