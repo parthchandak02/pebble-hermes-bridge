@@ -272,3 +272,28 @@ async def test_broken_taskbox_never_blocks_press(tmp_path) -> None:
     finally:
         await client.close()
     assert "task_id" not in fwd.calls[0][0]
+
+
+async def test_external_finish_posts_to_whatsapp(store, monkeypatch) -> None:
+    import whatsapp_ack
+
+    sent = []
+
+    async def fake_send(session, chat_id, text, bridge_port=3000, timeout=5.0):
+        sent.append((chat_id, text))
+        return True
+
+    monkeypatch.setattr(whatsapp_ack, "send_ack", fake_send)
+    cfg = make_cfg(notify_chat_id="123@g.us")
+    tools = Tools(store, cfg)
+    h, g = cfg.agents["hermes"], cfg.agents["grokbot"]
+    t = await tools.call(h, "create_task", {"title": "Find a dentist", "assignee": "grokbot"})
+    await tools.call(g, "claim_task", {"task_id": t["id"]})
+    await tools.call(g, "update_task", {"task_id": t["id"], "note": "looking"})
+    assert sent == []  # notes alone stay quiet
+    await tools.call(g, "update_task", {"task_id": t["id"], "status": "done", "result": "Dr. A, Tue 3pm"})
+    assert len(sent) == 1 and sent[0][0] == "123@g.us"
+    assert "grokbot" in sent[0][1] and t["id"] in sent[0][1] and "Dr. A, Tue 3pm" in sent[0][1]
+    t2 = await tools.call(h, "create_task", {"title": "mine"})
+    await tools.call(h, "update_task", {"task_id": t2["id"], "status": "done", "result": "x"})
+    assert len(sent) == 1  # Hermes answers in chat itself; no duplicate notice

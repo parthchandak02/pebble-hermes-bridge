@@ -302,6 +302,10 @@ class ServerConfig:
     db_path: Path = DEFAULT_DB
     agents: dict[str, Agent] = field(default_factory=dict)
     allowed_origins: tuple[str, ...] = ()
+    # When an external agent finishes or fails a task, post it to this WhatsApp chat via the local
+    # bridge (same path as the ring's ack). Empty = off.
+    notify_chat_id: str = ""
+    bridge_port: int = 3000
 
 
 def read_env_file(path: Path) -> dict[str, str]:
@@ -325,6 +329,9 @@ def load_server_config(config_path: Optional[Path] = None, secrets_path: Optiona
     data = {}
     if config_path.exists():
         data = (yaml.safe_load(config_path.read_text()) or {}).get("taskbox") or {}
+    whatsapp = {}
+    if config_path.exists():
+        whatsapp = (yaml.safe_load(config_path.read_text()) or {}).get("whatsapp") or {}
     sec = read_env_file(secrets_path)
     agents: dict[str, Agent] = {}
     for name, spec in (data.get("agents") or {}).items():
@@ -353,6 +360,8 @@ def load_server_config(config_path: Optional[Path] = None, secrets_path: Optiona
         db_path=db_path,
         agents=agents,
         allowed_origins=tuple(data.get("allowed_origins") or ()),
+        notify_chat_id=str(data.get("notify_chat_id") or whatsapp.get("ack_chat_id") or ""),
+        bridge_port=int(whatsapp.get("ack_bridge_port", 3000)),
     )
 
 
@@ -507,6 +516,28 @@ class Tools:
         log.info("doorbell", extra={"json_fields": {"task": task["id"], "agent": target.name, "outcome": outcome}})
         return outcome
 
+    async def _notify_finished(self, agent: Agent, task: dict[str, Any]) -> None:
+        """Tell Parth on WhatsApp that an external agent finished (best-effort, never raises)."""
+        if not self.cfg.notify_chat_id:
+            return
+        try:
+            import whatsapp_ack
+
+            mark = "✅" if task["status"] == "done" else "⚠️"
+            verb = "finished" if task["status"] == "done" else task["status"]
+            result = (task.get("result") or "").strip()
+            if len(result) > 1500:
+                result = result[:1499] + "…"
+            text = f"{mark} *{agent.name}* {verb} `{task['id']}` · {task['title']}"
+            if result:
+                text += f"\n\n{result}"
+            ok = await whatsapp_ack.send_ack(
+                self.session_getter(), self.cfg.notify_chat_id, text, bridge_port=self.cfg.bridge_port
+            )
+            self.store._event(task["id"], "taskbox", "notified", "whatsapp ok" if ok else "whatsapp failed")
+        except Exception:
+            log.warning("finish notice failed", exc_info=True)
+
     async def call(self, agent: Agent, name: str, args: dict[str, Any]) -> Any:
         if not isinstance(args, dict):
             raise TaskError("arguments must be an object")
@@ -550,10 +581,14 @@ class Tools:
             task = self.store.get(args.get("task_id", ""))
             if not self._visible(agent, task):
                 raise TaskError(f"no task {args.get('task_id')}")
-            return self.store.update(
+            before = task["status"]
+            task = self.store.update(
                 task["id"], actor=agent.name, is_admin=agent.admin,
                 status=args.get("status"), result=args.get("result"), note=args.get("note"),
             )
+            if agent.external and task["status"] in ("done", "failed") and before != task["status"]:
+                await self._notify_finished(agent, task)
+            return task
         if name == "assign_task":
             if not agent.admin:
                 raise TaskError("only an admin agent can assign tasks")
