@@ -470,6 +470,40 @@ class _Ctx:
         self.clock = clock
         self._taskbox: Any = None
 
+    def direct_target(self, transcript: str, trigger: str) -> Optional[tuple[str, str]]:
+        """(agent, transcript without the spoken prefix) when this press skips Hermes, else None.
+
+        Read fresh per press from config.yaml ``taskbox.direct``:
+            triggers: {double-click-hold: grokbot}   # by ring gesture
+            phrases:  {grok: grokbot}                # transcript starts with "Grok, ..."
+        """
+        if not self.cfg.taskbox_db:
+            return None
+        data, _ = _yaml_loader()
+        direct = ((data or {}).get("taskbox") or {}).get("direct") or {}
+        by_trigger = direct.get("triggers") or {}
+        if trigger and trigger in by_trigger:
+            return str(by_trigger[trigger]), transcript
+        words = transcript.strip()
+        for phrase, agent in (direct.get("phrases") or {}).items():
+            m = re.match(rf"^\s*(hey\s+)?{re.escape(str(phrase))}\b[\s,.:;!-]*", words, re.IGNORECASE)
+            if m and words[m.end():].strip():
+                return str(agent), words[m.end():].strip()
+        return None
+
+    async def send_direct(self, task_id: str, agent_name: str) -> str:
+        """Assign the press's task to an external agent and ring its doorbell. Returns the outcome."""
+        import taskbox
+
+        cfg = taskbox.load_server_config()
+        agent = cfg.agents.get(agent_name)
+        if agent is None or not agent.webhook_url:
+            return "no-such-agent-or-webhook"
+        task = self._taskbox.assign(task_id, agent_name, actor="pebble")
+        outcome = await taskbox.ring_doorbell(getattr(self.forwarder, "_session", None), agent, task)
+        self._taskbox._event(task_id, "pebble", "doorbell", f"{agent_name}: {outcome}")
+        return outcome
+
     def record_press(self, *, transcript: str, delivery: str, trigger: str, sensitive: bool) -> Optional[str]:
         """Write the press to the shared task inbox; return its task id (None if disabled)."""
         if not self.cfg.taskbox_db:
@@ -640,10 +674,21 @@ async def dispatch(request: web.Request, ctx: _Ctx) -> web.Response:
         )
 
         # --- shared task inbox (best-effort: never blocks the press) --------
+        direct: Optional[tuple[str, str]] = None
         if not is_test:
             try:
+                direct = ctx.direct_target(transcript, trigger)
+            except Exception:
+                log.exception("direct route config unreadable - press goes to Hermes")
+            if direct and sens:
+                # GATE > ROUTE: sensitive presses never leave for an external agent.
+                log.info("direct route skipped: sensitive", extra={"json_fields": {"delivery": delivery}})
+                payload["direct_skipped"] = "sensitive"
+                direct = None
+            try:
                 task_id = ctx.record_press(
-                    transcript=transcript, delivery=delivery, trigger=trigger, sensitive=bool(sens)
+                    transcript=direct[1] if direct else transcript,
+                    delivery=delivery, trigger=trigger, sensitive=bool(sens),
                 )
                 if task_id:
                     payload["task_id"] = task_id
@@ -651,7 +696,34 @@ async def dispatch(request: web.Request, ctx: _Ctx) -> web.Response:
                         "delivery": delivery, "task_id": task_id,
                     }})
             except Exception:
+                task_id = None
                 log.exception("taskbox write failed - press forwarded without a task id")
+            if direct and task_id:
+                outcome = "error"
+                try:
+                    outcome = await ctx.send_direct(task_id, direct[0])
+                except Exception:
+                    log.exception("direct route failed - falling back to Hermes")
+                log.info("direct route", extra={"json_fields": {
+                    "delivery": delivery, "task_id": task_id, "agent": direct[0], "outcome": outcome,
+                }})
+                if outcome.startswith("http-2"):
+                    if cfg.ack_chat_id:
+                        short = direct[1] if len(direct[1]) <= 200 else direct[1][:197] + "…"
+                        ack_session = getattr(ctx.forwarder, "_session", None)
+                        text = f'{cfg.ack_emoji} _"{short}"_\n➡️ sent straight to *{direct[0]}* · `{task_id}`'
+
+                        async def _direct_ack() -> None:
+                            try:
+                                await whatsapp_ack.send_ack(ack_session, cfg.ack_chat_id, text,
+                                                            bridge_port=cfg.ack_bridge_port)
+                            except Exception:
+                                log.warning("direct ack failed", exc_info=True)
+
+                        asyncio.create_task(_direct_ack())
+                    return web.Response(status=202, text="")
+                # Doorbell failed: Hermes still gets the press, and knows why.
+                payload["direct_failed"] = f"{direct[0]}: {outcome}"
 
         # --- action triggers (spoken command, deterministic) ----------------
         # GATE > TRIGGER: a sensitive-gate hit never auto-dials. Actions are

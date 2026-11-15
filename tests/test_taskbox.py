@@ -309,3 +309,79 @@ async def test_bare_token_accepted_and_case_insensitive_bearer(tmp_path) -> None
             assert (await client.post("/mcp", json=msg, headers={"Authorization": value})).status == 401
     finally:
         await client.close()
+
+
+# --- direct routes: ring press straight to an external agent ----------------------
+
+def _direct_env(tmp_path, monkeypatch, outcome="http-200"):
+    import taskbox as tb
+
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        "taskbox:\n  agents:\n    hermes: {admin: true}\n"
+        "    grokbot: {external: true, webhook_url: 'https://example.invalid/hook'}\n"
+        "  direct:\n    triggers: {double-click-hold: grokbot}\n    phrases: {grok: grokbot}\n"
+    )
+    sec = tmp_path / "s.env"
+    sec.write_text(f"TASKBOX_TOKEN_HERMES={HERMES_TOKEN}\nTASKBOX_TOKEN_GROKBOT={GROK_TOKEN}\n")
+    monkeypatch.setenv("INDEX01_CONFIG", str(cfg))
+    monkeypatch.setenv("TASKBOX_SECRETS", str(sec))
+    rung = []
+
+    async def fake_ring(session, agent, task, timeout=15.0):
+        rung.append((agent.name, task["id"], task["title"]))
+        return outcome
+
+    monkeypatch.setattr(tb, "ring_doorbell", fake_ring)
+    return rung
+
+
+async def _press(tmp_path, *, trigger="single-click-hold", transcript="water the plants", delivery="d-1"):
+    from tests.test_adapter import FakeForwarder, make_client, make_config, valid_body
+
+    fwd = FakeForwarder(status=202)
+    client = await make_client(make_config(taskbox_db=str(tmp_path / "p.db")), fwd, clock=lambda: 1700000300.0)
+    try:
+        body, headers = valid_body(trigger=trigger, transcript=transcript, delivery=delivery)
+        resp = await client.post("/x", data=body, headers=headers)
+        return resp.status, fwd
+    finally:
+        await client.close()
+
+
+async def test_gesture_goes_straight_to_grokbot(tmp_path, monkeypatch) -> None:
+    rung = _direct_env(tmp_path, monkeypatch)
+    status, fwd = await _press(tmp_path, trigger="double-click-hold", transcript="find a cheap flight to Austin")
+    assert status == 202 and fwd.calls == []  # Hermes skipped
+    assert rung[0][0] == "grokbot" and rung[0][2] == "find a cheap flight to Austin"
+    s = Store(tmp_path / "p.db")
+    t = s.list()[0]
+    assert t["assignee"] == "grokbot" and "doorbell" in [h["kind"] for h in s.history(t["id"])]
+    s.close()
+
+
+async def test_spoken_prefix_goes_to_grokbot_and_is_stripped(tmp_path, monkeypatch) -> None:
+    rung = _direct_env(tmp_path, monkeypatch)
+    status, fwd = await _press(tmp_path, transcript="Hey Grok, compare two dentists near me")
+    assert status == 202 and fwd.calls == []
+    assert rung[0][2] == "compare two dentists near me"
+
+
+async def test_plain_press_still_goes_to_hermes(tmp_path, monkeypatch) -> None:
+    rung = _direct_env(tmp_path, monkeypatch)
+    status, fwd = await _press(tmp_path, transcript="groceries: milk and eggs")  # "groceries" is not "grok"
+    assert status == 202 and len(fwd.calls) == 1 and rung == []
+
+
+async def test_sensitive_press_never_goes_direct(tmp_path, monkeypatch) -> None:
+    rung = _direct_env(tmp_path, monkeypatch)
+    status, fwd = await _press(tmp_path, trigger="double-click-hold", transcript="grok what is my bank password")
+    assert rung == [] and len(fwd.calls) == 1
+    assert fwd.calls[0][0]["direct_skipped"] == "sensitive" and fwd.calls[0][0]["sensitive"] is True
+
+
+async def test_failed_doorbell_falls_back_to_hermes(tmp_path, monkeypatch) -> None:
+    rung = _direct_env(tmp_path, monkeypatch, outcome="error-ClientConnectorError")
+    status, fwd = await _press(tmp_path, trigger="double-click-hold", transcript="book a table")
+    assert len(rung) == 1 and len(fwd.calls) == 1
+    assert fwd.calls[0][0]["direct_failed"].startswith("grokbot: error")
