@@ -662,9 +662,12 @@ async def handle_rpc(tools: Tools, agent: Agent, msg: Any) -> Optional[dict[str,
 
 
 def authenticate(cfg: ServerConfig, header: str) -> Optional[Agent]:
-    if not header.startswith("Bearer "):
+    # "Bearer <token>" per the spec; a bare token is accepted too, because some connector UIs
+    # (Cursor's MCP settings) take the header value verbatim and people paste only the token.
+    header = header.strip()
+    given = header[len("Bearer "):].strip() if header[:7].lower() == "bearer " else header
+    if not given:
         return None
-    given = header[len("Bearer "):].strip()
     found = None
     for agent in cfg.agents.values():  # compare against every token: constant work per request
         if hmac.compare_digest(agent.token, given):
@@ -698,7 +701,13 @@ def build_app(cfg: ServerConfig, store: Optional[Store] = None):
             return web.Response(status=403, text="origin not allowed")
         agent = authenticate(cfg, request.headers.get("Authorization", ""))
         if agent is None:
-            log.warning("unauthorized", extra={"json_fields": {"remote": request.remote}})
+            raw = request.headers.get("Authorization", "")
+            log.warning("unauthorized", extra={"json_fields": {
+                "remote": request.remote,
+                # shape only, never the value: helps tell "missing Bearer" from "wrong token"
+                "auth_present": bool(raw), "bearer_prefix": raw[:7].lower() == "bearer ",
+                "auth_len": len(raw), "ua": request.headers.get("User-Agent", "")[:60],
+            }})
             return web.Response(status=401, text="unauthorized", headers={"WWW-Authenticate": 'Bearer realm="taskbox"'})
         try:
             msg = json.loads(await request.read())

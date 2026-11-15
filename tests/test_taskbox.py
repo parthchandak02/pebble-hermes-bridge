@@ -297,3 +297,15 @@ async def test_external_finish_posts_to_whatsapp(store, monkeypatch) -> None:
     t2 = await tools.call(h, "create_task", {"title": "mine"})
     await tools.call(h, "update_task", {"task_id": t2["id"], "status": "done", "result": "x"})
     assert len(sent) == 1  # Hermes answers in chat itself; no duplicate notice
+
+
+async def test_bare_token_accepted_and_case_insensitive_bearer(tmp_path) -> None:
+    client = await _client(tmp_path)
+    try:
+        msg = {"jsonrpc": "2.0", "id": 1, "method": "ping"}
+        for value in (GROK_TOKEN, f"bearer {GROK_TOKEN}", f"  Bearer {GROK_TOKEN} "):
+            assert (await client.post("/mcp", json=msg, headers={"Authorization": value})).status == 200
+        for value in ("", "Bearer ", "Bearer", GROK_TOKEN[:-1]):
+            assert (await client.post("/mcp", json=msg, headers={"Authorization": value})).status == 401
+    finally:
+        await client.close()
