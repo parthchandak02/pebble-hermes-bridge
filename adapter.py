@@ -133,6 +133,8 @@ class Config:
     # Spoken-phrase action triggers (phone_action.py); read fresh per press.
     actions_enabled: bool = False
     ack_call_emoji: str = "📞"
+    # Shared task inbox (taskbox.py): every press is recorded there first.
+    taskbox_db: Optional[str] = None         # path to taskbox.db; None disables
 
     @property
     def signing_enabled(self) -> bool:
@@ -194,6 +196,9 @@ def load_config() -> Config:
     call_emoji = env.get(
         "INDEX01_ACK_CALL_EMOJI", _get("whatsapp", "ack_call_emoji", default="📞")
     )
+    taskbox_db = env.get("INDEX01_TASKBOX_DB", _get("taskbox", "db_path"))
+    if taskbox_db and not os.path.isabs(str(taskbox_db)):
+        taskbox_db = os.path.join(os.path.dirname(os.path.abspath(__file__)), str(taskbox_db))
 
     missing = [k for k, v in (("route_secret", route), ("hermes_url", hermes_url)) if not v]
     if missing:
@@ -225,6 +230,7 @@ def load_config() -> Config:
         ack_emoji=str(ack_emoji),
         actions_enabled=actions_enabled,
         ack_call_emoji=str(call_emoji),
+        taskbox_db=str(taskbox_db) if taskbox_db else None,
     )
 
 
@@ -462,6 +468,28 @@ class _Ctx:
         self.cfg = cfg
         self.forwarder = forwarder
         self.clock = clock
+        self._taskbox: Any = None
+
+    def record_press(self, *, transcript: str, delivery: str, trigger: str, sensitive: bool) -> Optional[str]:
+        """Write the press to the shared task inbox; return its task id (None if disabled)."""
+        if not self.cfg.taskbox_db:
+            return None
+        if self._taskbox is None:
+            import taskbox
+
+            self._taskbox = taskbox.Store(self.cfg.taskbox_db)
+        title = " ".join(transcript.split())
+        if len(title) > 80:
+            title = title[:79] + "…"
+        task = self._taskbox.create(
+            actor="pebble",
+            source="pebble",
+            title=title,
+            body=f"Ring press ({trigger}):\n{transcript}",
+            sensitive=sensitive,
+            origin_ref=delivery,
+        )
+        return task["id"]
 
 
 CTX_KEY: web.AppKey = web.AppKey("ctx", _Ctx)
@@ -610,6 +638,20 @@ async def dispatch(request: web.Request, ctx: _Ctx) -> web.Response:
                 "sensitive": bool(sens),
             }},
         )
+
+        # --- shared task inbox (best-effort: never blocks the press) --------
+        if not is_test:
+            try:
+                task_id = ctx.record_press(
+                    transcript=transcript, delivery=delivery, trigger=trigger, sensitive=bool(sens)
+                )
+                if task_id:
+                    payload["task_id"] = task_id
+                    log.info("recorded in taskbox", extra={"json_fields": {
+                        "delivery": delivery, "task_id": task_id,
+                    }})
+            except Exception:
+                log.exception("taskbox write failed - press forwarded without a task id")
 
         # --- action triggers (spoken command, deterministic) ----------------
         # GATE > TRIGGER: a sensitive-gate hit never auto-dials. Actions are

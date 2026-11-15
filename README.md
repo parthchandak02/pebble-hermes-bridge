@@ -45,6 +45,8 @@ a clean prompt it can answer on WhatsApp, Telegram or any other gateway platform
 ```
 Pebble Index 01 ──BLE──> phone app ──HTTPS──> tailscale serve
                                                    └──> adapter (:8645) ──> Hermes webhook (:8644) ──> agent ──> chat
+                                                            │
+                                                            └──> taskbox (:8646) <──MCP── Hermes, Grok Bot, other agents
 ```
 
 <table>
@@ -92,7 +94,12 @@ code back to the app, so it shows in the app's recent runs.
 - **Spoken action triggers (proof of concept).** A press that starts with a configured
   phrase POSTs to an ntfy topic, which an iPhone Shortcut can turn into a call. Prefix match
   only, rate-capped at 3 per hour, never fired on a sensitive press, off by default.
-- **Runs as a service.** A launchd agent on macOS, JSON logs, `/healthz`, loopback only.
+- **One task inbox for every agent.** `taskbox.py` keeps every press, and anything you assign
+  in chat, in one SQLite file on your machine, served to agents as MCP tools. Each agent has its
+  own token; external bots see only tasks assigned to them, sensitive tasks never reach them,
+  and assigning a task to a bot with a webhook wakes it straight away.
+- **Runs as a service.** A launchd agent on macOS (systemd on Linux), JSON logs, `/healthz`,
+  loopback only.
 
 ## Hardware
 
@@ -162,6 +169,43 @@ Without `deliver`, the reply goes back over the webhook.
 </details>
 
 <details>
+<summary><b>Task inbox (taskbox)</b></summary>
+
+`taskbox.py` runs as its own service on `127.0.0.1:8646` and stores tasks in
+`data/taskbox.db` (gitignored). The adapter writes every real press there first, retries reuse
+the same task, and the task id rides along to Hermes as `task_id`. If the inbox is down, the
+press still goes through.
+
+Agents connect over MCP (Streamable HTTP, JSON responses) at `/mcp` with
+`Authorization: Bearer <their token>`. Tools: `create_task`, `list_tasks`, `get_task`,
+`claim_task`, `update_task`, `assign_task`, `list_agents`.
+
+```yaml
+# config.yaml
+taskbox:
+  port: 8646
+  db_path: "data/taskbox.db"
+  agents:
+    hermes: { admin: true }                 # sees and changes everything
+    grokbot:
+      external: true                        # only its own, never sensitive
+      webhook_url: "https://..."            # optional doorbell: POSTed on assignment
+```
+
+```bash
+# taskbox.secrets.env (chmod 640, gitignored): one token per agent, 32+ chars
+TASKBOX_TOKEN_HERMES=...
+TASKBOX_TOKEN_GROKBOT=...
+TASKBOX_WEBHOOK_KEY_GROKBOT=...             # bearer sent with the doorbell, if the bot wants one
+```
+
+Hermes side: add it under `mcp_servers` with `url: http://127.0.0.1:8646/mcp` and
+`headers: {Authorization: "Bearer ${TASKBOX_TOKEN}"}`, then `hermes mcp test taskbox`.
+A cloud bot needs a public HTTPS hostname in front of `/mcp` (for example a Cloudflare tunnel).
+
+</details>
+
+<details>
 <summary><b>Security notes</b></summary>
 
 - The adapter listens on loopback only. Expose it through Tailscale or another private
@@ -184,6 +228,7 @@ adapter.py                 The bridge: multipart parsing, HMAC checks, gate, for
 pebble_router.py           Sensitive-keyword gate and routing.yaml validation
 phone_action.py            Spoken-phrase action triggers (ntfy)
 whatsapp_ack.py            Instant ack via the local Baileys bridge
+taskbox.py                 Shared task inbox: SQLite store + MCP server + bot doorbell
 wa                         CLI for agent sessions: list groups, send to a group by alias
 routing.example.yaml       Template for routing.yaml (gitignored): group aliases, JIDs, sensitive words
 .env.example               Template for .env (gitignored): delivery/ack chat JIDs, path overrides
@@ -193,7 +238,7 @@ install.sh                 Installs the launchd agent
 apply-hermes-config.py     Appends the webhook route to ~/.hermes/config.yaml, with a backup
 e2e_test.py                Signed end-to-end POST against a running adapter
 ack_e2e_test.py            Live press (real ack to WhatsApp) + bridge-log check
-tests/                     pytest suite: 85 tests for parsing, auth, gate and actions
+tests/                     pytest suite: 100 tests for parsing, auth, gate, actions and the inbox
 ```
 
 </details>

@@ -18,7 +18,7 @@ dependencies = [
 test = ["pytest>=8", "pytest-asyncio>=0.23"]
 
 [tool.setuptools]
-py-modules = ["adapter"]
+py-modules = ["adapter", "taskbox"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

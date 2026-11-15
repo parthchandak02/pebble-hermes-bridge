@@ -23,3 +23,7 @@ make-config\.sh:[0-9]+:.*\.env
 run\.py:[0-9]+:.*(secrets\.env|SECRET|TOKEN|INDEX01_)
 ack_e2e_test\.py:[0-9]+:.*secrets\.env
 README\.md:[0-9]+:.*INDEX01_\*
+taskbox\.py:[0-9]+:.*(TASKBOX_|token|Bearer|secrets\.env|webhook_key)
+tests/test_taskbox\.py:[0-9]+:.*(TOKEN|Bearer|TASKBOX_|wk_test)
+README\.md:[0-9]+:.*(TASKBOX_|secrets\.env)
+adapter\.py:[0-9]+:.*INDEX01_TASKBOX_DB
