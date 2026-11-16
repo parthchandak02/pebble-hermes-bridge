@@ -835,7 +835,7 @@ async def dispatch(request: web.Request, ctx: _Ctx) -> web.Response:
             extra={"json_fields": {"delivery": delivery, "reason": "multipart_parse"}},
         )
         return web.Response(status=400, text=f"malformed multipart body: {exc}")
-    except Exception as exc:
+    except Exception:
         log.error(
             "unexpected error in dispatch",
             extra={"json_fields": {"delivery": delivery, "trigger": trigger}},

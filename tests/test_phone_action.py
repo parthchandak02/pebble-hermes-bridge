@@ -6,7 +6,7 @@ embedding), per-hour rate cap, and fail-closed config validation.
 """
 from __future__ import annotations
 
-import asyncio
+import os
 from unittest.mock import patch as mock_patch
 
 import aiohttp
@@ -96,6 +96,12 @@ def test_load_triggers_rejects_non_mapping():
 
 
 def test_get_actions_reads_real_config():
+    # config.yaml is gitignored install state. CI and a clean worktree do not have it.
+    path = os.environ.get("INDEX01_CONFIG") or os.path.join(
+        os.path.dirname(os.path.abspath(phone_action.__file__)), "config.yaml"
+    )
+    if not os.path.isfile(path):
+        pytest.skip("config.yaml is install state and is not in the repo")
     enabled, rate, triggers = get_actions()
     assert isinstance(enabled, bool)
     assert rate >= 1
@@ -279,7 +285,9 @@ async def test_adapter_dispatch_fires_action_on_phrase(tmp_path, monkeypatch):
             fired["payload"] = payload
             return 202
 
-    import hashlib, hmac as hmac_mod, json as json_mod, time as time_mod
+    import hashlib
+    import hmac as hmac_mod
+    import time as time_mod
 
     secret = "test-secret"
     cfg = Config(signing_secret=secret, route_secret="r", hermes_url="http://x")
@@ -338,7 +346,9 @@ async def test_adapter_sensitive_press_never_fires_action(tmp_path, monkeypatch)
             fired["payload"] = payload
             return 202
 
-    import hashlib, hmac as hmac_mod, time as time_mod
+    import hashlib
+    import hmac as hmac_mod
+    import time as time_mod
 
     secret = "test-secret"
     cfg = Config(signing_secret=secret, route_secret="r", hermes_url="http://x")

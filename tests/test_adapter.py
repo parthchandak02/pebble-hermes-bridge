@@ -7,8 +7,6 @@ contacted.
 """
 
 import asyncio
-import hashlib
-import hmac
 import inspect
 import json
 
@@ -802,7 +800,6 @@ async def test_press_acks_intake_single() -> None:
 @pytest.mark.asyncio
 async def test_gate_fails_closed_on_bad_routing_yaml(monkeypatch) -> None:
     """Reviewer finding: routing.yaml failure silently disabled the sensitive gate."""
-    import adapter as adapt
     fwd = FakeForwarder(status=202)
     body, headers = valid_body(transcript="remind me to water the plants", ts="1700000300")
     client = await make_client(make_config(), fwd, clock=lambda: 1700000300.0)

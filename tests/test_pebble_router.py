@@ -8,7 +8,7 @@ from pathlib import Path
 import yaml
 import pytest
 
-from pebble_router import route_press, load_routing, sensitive_hit, keyword_candidates
+from pebble_router import route_press, load_routing, sensitive_hit
 
 # The committed template (fictional JIDs); the real routing.yaml is git-ignored.
 EXAMPLE_ROUTING = Path(__file__).resolve().parent.parent / "routing.example.yaml"
