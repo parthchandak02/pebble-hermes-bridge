@@ -19,7 +19,6 @@ Stdlib + aiohttp + PyYAML only, like the adapter. Never logs tokens or bodies.
 from __future__ import annotations
 
 import argparse
-import asyncio
 import hmac
 import json
 import logging
