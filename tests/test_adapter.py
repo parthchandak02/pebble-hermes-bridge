@@ -16,6 +16,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from adapter import (
+    AdapterError,
     Config,
     HermesForwarder,
     MultipartError,
@@ -695,6 +696,173 @@ async def test_real_forwarder_signature_verified_by_fake_hermes() -> None:
         assert received[0]["body"] == payload
     finally:
         await server.close()
+
+
+class _FakeResponse:
+    def __init__(self, status: int, body: bytes = b"") -> None:
+        self.status = status
+        self._body = body
+
+    async def __aenter__(self) -> "_FakeResponse":
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        return None
+
+    async def read(self) -> bytes:
+        return self._body
+
+
+class _StubSession:
+    def __init__(self, outcomes: list[object]) -> None:
+        self._outcomes = list(outcomes)
+        self.calls: list[dict[str, object]] = []
+
+    def post(self, url: str, *, data: bytes, headers: dict[str, str], timeout: float):
+        self.calls.append(
+            {"url": url, "data": data, "headers": dict(headers), "timeout": timeout}
+        )
+        outcome = self._outcomes.pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        assert isinstance(outcome, int)
+        return _FakeResponse(outcome)
+
+
+@pytest.mark.asyncio
+async def test_forwarder_retries_transient_errors_and_recomputes_fresh_signatures() -> None:
+    ticks = iter([1700000300.0, 1700000302.0, 1700000305.0])
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    session = _StubSession([aiohttp.ClientError("conn reset"), TimeoutError("slow"), 202])
+    fwd = HermesForwarder(
+        session,  # type: ignore[arg-type]
+        ROUTE_SECRET,
+        "http://127.0.0.1:8644/webhooks/pebble",
+        clock=lambda: next(ticks),
+        sleep=fake_sleep,
+    )
+    payload = {"transcript": "retry me", "delivery": "deliv-1"}
+    status = await fwd.send(payload, "deliv-1")
+
+    assert status == 202
+    assert len(session.calls) == 3
+    assert sleeps == [0.25, 0.5]
+
+    expected_body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    expected_timestamps = ["1700000300", "1700000302", "1700000305"]
+    for call, exp_ts in zip(session.calls, expected_timestamps, strict=True):
+        assert call["data"] == expected_body
+        headers = call["headers"]
+        assert isinstance(headers, dict)
+        assert headers["X-Request-ID"] == "deliv-1"
+        assert headers["X-Webhook-Timestamp"] == exp_ts
+        assert headers["X-Webhook-Signature-V2"] == sign_hermes_request(
+            ROUTE_SECRET, exp_ts, expected_body
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retryable_status", [502, 503, 504])
+async def test_forwarder_retries_502_503_504_and_recovers(retryable_status: int) -> None:
+    ticks = iter([1700000300.0, 1700000301.0, 1700000302.0])
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    session = _StubSession([retryable_status, retryable_status, 200])
+    fwd = HermesForwarder(
+        session,  # type: ignore[arg-type]
+        ROUTE_SECRET,
+        "http://127.0.0.1:8644/webhooks/pebble",
+        clock=lambda: next(ticks),
+        sleep=fake_sleep,
+    )
+    status = await fwd.send({"transcript": "hello"}, "deliv-5xx")
+    assert status == 200
+    assert len(session.calls) == 3
+    assert sleeps == [0.25, 0.5]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("non_retryable", [200, 202, 400, 401, 403, 404, 429, 500])
+async def test_forwarder_does_not_retry_non_retryable_status(non_retryable: int) -> None:
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    session = _StubSession([non_retryable, 200])
+    fwd = HermesForwarder(
+        session,  # type: ignore[arg-type]
+        ROUTE_SECRET,
+        "http://127.0.0.1:8644/webhooks/pebble",
+        clock=lambda: 1700000300.0,
+        sleep=fake_sleep,
+    )
+    status = await fwd.send({"transcript": "hello"}, "deliv-noretry")
+    assert status == non_retryable
+    assert len(session.calls) == 1
+    assert sleeps == []
+
+
+@pytest.mark.asyncio
+async def test_forwarder_exhausted_retries_return_final_status_or_raise() -> None:
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    # Exhausted HTTP 503 returns final status after 3 attempts.
+    s_status = _StubSession([502, 504, 503])
+    fwd_status = HermesForwarder(
+        s_status,  # type: ignore[arg-type]
+        ROUTE_SECRET,
+        "http://127.0.0.1:8644/webhooks/pebble",
+        clock=lambda: 1700000300.0,
+        sleep=fake_sleep,
+    )
+    assert await fwd_status.send({"transcript": "x"}, "d-status") == 503
+    assert len(s_status.calls) == 3
+    assert sleeps == [0.25, 0.5]
+
+    # Exhausted ClientError raises AdapterError(502) after 3 attempts.
+    sleeps.clear()
+    s_client = _StubSession(
+        [aiohttp.ClientError("e1"), aiohttp.ClientError("e2"), aiohttp.ClientError("e3")]
+    )
+    fwd_client = HermesForwarder(
+        s_client,  # type: ignore[arg-type]
+        ROUTE_SECRET,
+        "http://127.0.0.1:8644/webhooks/pebble",
+        clock=lambda: 1700000300.0,
+        sleep=fake_sleep,
+    )
+    with pytest.raises(AdapterError) as exc_502:
+        await fwd_client.send({"transcript": "x"}, "d-502")
+    assert exc_502.value.status == 502
+    assert len(s_client.calls) == 3
+    assert sleeps == [0.25, 0.5]
+
+    # Exhausted TimeoutError raises AdapterError(504) after 3 attempts.
+    sleeps.clear()
+    s_timeout = _StubSession([TimeoutError("t1"), TimeoutError("t2"), TimeoutError("t3")])
+    fwd_timeout = HermesForwarder(
+        s_timeout,  # type: ignore[arg-type]
+        ROUTE_SECRET,
+        "http://127.0.0.1:8644/webhooks/pebble",
+        clock=lambda: 1700000300.0,
+        sleep=fake_sleep,
+    )
+    with pytest.raises(AdapterError) as exc_504:
+        await fwd_timeout.send({"transcript": "x"}, "d-504")
+    assert exc_504.value.status == 504
+    assert len(s_timeout.calls) == 3
+    assert sleeps == [0.25, 0.5]
 
 
 # ---------------------------------------------------------------------------

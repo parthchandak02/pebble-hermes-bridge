@@ -412,6 +412,9 @@ def sign_hermes_request(route_secret: str, timestamp: str, body_bytes: bytes) ->
 class HermesForwarder:
     """Sends verified events to the Hermes webhook platform and returns its status."""
 
+    _RETRYABLE_STATUSES = frozenset({502, 503, 504})
+    _DEFAULT_RETRY_DELAYS = (0.25, 0.5)
+
     def __init__(
         self,
         session: aiohttp.ClientSession,
@@ -419,39 +422,58 @@ class HermesForwarder:
         url: str,
         timeout: float = 20.0,
         clock: Callable[[], float] = time.time,
+        sleep: Callable[[float], Any] = asyncio.sleep,
+        retry_delays: tuple[float, ...] = _DEFAULT_RETRY_DELAYS,
     ) -> None:
         self._session = session
         self._route_secret = route_secret
         self._url = url
         self._timeout = timeout
         self._clock = clock
+        self._sleep = sleep
+        self._retry_delays = retry_delays
 
     async def send(self, payload: dict[str, Any], delivery: str) -> int:
         """Serialize ``payload`` exactly, sign, and POST; return the HTTP status.
 
         The body bytes are serialized once and the signature is computed over that
-        exact serialization, so request and signature can never diverge.
+        exact serialization, so request and signature can never diverge. Retries up
+        to 2 times on transient transport errors or HTTP 502/503/504 with a fresh
+        timestamp and signature on each attempt.
         """
         body_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-        timestamp = str(int(self._clock()))
-        signature = sign_hermes_request(self._route_secret, timestamp, body_bytes)
-        headers = {
-            "Content-Type": "application/json",
-            "X-Webhook-Timestamp": timestamp,
-            "X-Webhook-Signature-V2": signature,
-            "X-Request-ID": delivery,
-        }
-        try:
-            async with self._session.post(
-                self._url, data=body_bytes, headers=headers, timeout=self._timeout
-            ) as resp:
-                status = resp.status
-                await resp.read()  # drain; Hermes may include a short body
-                return status
-        except aiohttp.ClientError as exc:
-            raise AdapterError(502, f"forward to Hermes failed: {exc}", state="hermes_unreachable")
-        except TimeoutError as exc:
-            raise AdapterError(504, f"forward to Hermes timed out: {exc}", state="hermes_timeout")
+        max_attempts = 1 + len(self._retry_delays)
+        for attempt in range(max_attempts):
+            timestamp = str(int(self._clock()))
+            signature = sign_hermes_request(self._route_secret, timestamp, body_bytes)
+            headers = {
+                "Content-Type": "application/json",
+                "X-Webhook-Timestamp": timestamp,
+                "X-Webhook-Signature-V2": signature,
+                "X-Request-ID": delivery,
+            }
+            try:
+                async with self._session.post(
+                    self._url, data=body_bytes, headers=headers, timeout=self._timeout
+                ) as resp:
+                    status = resp.status
+                    await resp.read()  # drain; Hermes may include a short body
+            except aiohttp.ClientError as exc:
+                if attempt + 1 >= max_attempts:
+                    raise AdapterError(
+                        502, f"forward to Hermes failed: {exc}", state="hermes_unreachable"
+                    )
+            except TimeoutError as exc:
+                if attempt + 1 >= max_attempts:
+                    raise AdapterError(
+                        504, f"forward to Hermes timed out: {exc}", state="hermes_timeout"
+                    )
+            else:
+                if status not in self._RETRYABLE_STATUSES or attempt + 1 >= max_attempts:
+                    return status
+
+            await self._sleep(self._retry_delays[attempt])
+        raise AssertionError("unreachable")
 
 
 # ---------------------------------------------------------------------------
