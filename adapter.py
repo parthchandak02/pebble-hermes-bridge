@@ -437,13 +437,19 @@ class HermesForwarder:
         """Serialize ``payload`` exactly, sign, and POST; return the HTTP status.
 
         The body bytes are serialized once and the signature is computed over that
-        exact serialization, so request and signature can never diverge. Retries up
-        to 2 times on transient transport errors or HTTP 502/503/504 with a fresh
-        timestamp and signature on each attempt.
+        exact serialization, so request and signature can never diverge.
+
+        Retries (up to ``len(retry_delays)`` times, with a fresh timestamp and
+        signature each attempt) only when delivery clearly did not happen: the
+        connection could not be opened (``aiohttp.ClientConnectorError``) or Hermes
+        answered 502/503/504. A timeout or any other transport error may come after
+        Hermes already has the request, and Hermes is not known to dedupe on
+        X-Request-ID, so those fail at once to avoid posting the same press twice.
         """
         body_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         max_attempts = 1 + len(self._retry_delays)
         for attempt in range(max_attempts):
+            last_attempt = attempt + 1 >= max_attempts
             timestamp = str(int(self._clock()))
             signature = sign_hermes_request(self._route_secret, timestamp, body_bytes)
             headers = {
@@ -458,18 +464,22 @@ class HermesForwarder:
                 ) as resp:
                     status = resp.status
                     await resp.read()  # drain; Hermes may include a short body
-            except aiohttp.ClientError as exc:
-                if attempt + 1 >= max_attempts:
+            except TimeoutError as exc:
+                # Checked first: aiohttp.ServerTimeoutError is also a ClientError.
+                raise AdapterError(
+                    504, f"forward to Hermes timed out: {exc}", state="hermes_timeout"
+                )
+            except aiohttp.ClientConnectorError as exc:
+                if last_attempt:
                     raise AdapterError(
                         502, f"forward to Hermes failed: {exc}", state="hermes_unreachable"
                     )
-            except TimeoutError as exc:
-                if attempt + 1 >= max_attempts:
-                    raise AdapterError(
-                        504, f"forward to Hermes timed out: {exc}", state="hermes_timeout"
-                    )
+            except aiohttp.ClientError as exc:
+                raise AdapterError(
+                    502, f"forward to Hermes failed: {exc}", state="hermes_unreachable"
+                )
             else:
-                if status not in self._RETRYABLE_STATUSES or attempt + 1 >= max_attempts:
+                if status not in self._RETRYABLE_STATUSES or last_attempt:
                     return status
 
             await self._sleep(self._retry_delays[attempt])

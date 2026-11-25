@@ -13,6 +13,7 @@ import json
 import aiohttp
 import pytest
 from aiohttp import web
+from aiohttp.client_reqrep import ConnectionKey
 from aiohttp.test_utils import TestClient, TestServer
 
 from adapter import (
@@ -729,6 +730,11 @@ class _StubSession:
         return _FakeResponse(outcome)
 
 
+def _connect_error(msg: str = "refused") -> aiohttp.ClientConnectorError:
+    key = ConnectionKey("127.0.0.1", 8644, False, True, None, None, None, None)
+    return aiohttp.ClientConnectorError(key, ConnectionRefusedError(111, msg))
+
+
 @pytest.mark.asyncio
 async def test_forwarder_retries_transient_errors_and_recomputes_fresh_signatures() -> None:
     ticks = iter([1700000300.0, 1700000302.0, 1700000305.0])
@@ -737,7 +743,7 @@ async def test_forwarder_retries_transient_errors_and_recomputes_fresh_signature
     async def fake_sleep(delay: float) -> None:
         sleeps.append(delay)
 
-    session = _StubSession([aiohttp.ClientError("conn reset"), TimeoutError("slow"), 202])
+    session = _StubSession([_connect_error("e1"), 503, 202])
     fwd = HermesForwarder(
         session,  # type: ignore[arg-type]
         ROUTE_SECRET,
@@ -830,11 +836,9 @@ async def test_forwarder_exhausted_retries_return_final_status_or_raise() -> Non
     assert len(s_status.calls) == 3
     assert sleeps == [0.25, 0.5]
 
-    # Exhausted ClientError raises AdapterError(502) after 3 attempts.
+    # Refused connections every time raise AdapterError(502) after 3 attempts.
     sleeps.clear()
-    s_client = _StubSession(
-        [aiohttp.ClientError("e1"), aiohttp.ClientError("e2"), aiohttp.ClientError("e3")]
-    )
+    s_client = _StubSession([_connect_error("e1"), _connect_error("e2"), _connect_error("e3")])
     fwd_client = HermesForwarder(
         s_client,  # type: ignore[arg-type]
         ROUTE_SECRET,
@@ -848,21 +852,61 @@ async def test_forwarder_exhausted_retries_return_final_status_or_raise() -> Non
     assert len(s_client.calls) == 3
     assert sleeps == [0.25, 0.5]
 
-    # Exhausted TimeoutError raises AdapterError(504) after 3 attempts.
-    sleeps.clear()
-    s_timeout = _StubSession([TimeoutError("t1"), TimeoutError("t2"), TimeoutError("t3")])
-    fwd_timeout = HermesForwarder(
-        s_timeout,  # type: ignore[arg-type]
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "timeout_exc", [TimeoutError("slow"), aiohttp.ServerTimeoutError("read timed out")]
+)
+async def test_forwarder_timeout_makes_exactly_one_attempt(timeout_exc: Exception) -> None:
+    # Hermes may already have the message, so a timeout must not be retried.
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    session = _StubSession([timeout_exc, 202, 202])
+    fwd = HermesForwarder(
+        session,  # type: ignore[arg-type]
         ROUTE_SECRET,
         "http://127.0.0.1:8644/webhooks/pebble",
         clock=lambda: 1700000300.0,
         sleep=fake_sleep,
     )
-    with pytest.raises(AdapterError) as exc_504:
-        await fwd_timeout.send({"transcript": "x"}, "d-504")
-    assert exc_504.value.status == 504
-    assert len(s_timeout.calls) == 3
-    assert sleeps == [0.25, 0.5]
+    with pytest.raises(AdapterError) as exc:
+        await fwd.send({"transcript": "x"}, "d-timeout")
+    assert exc.value.status == 504
+    assert len(session.calls) == 1
+    assert sleeps == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mid_request_exc",
+    [
+        aiohttp.ServerDisconnectedError(),
+        aiohttp.ClientOSError(104, "connection reset"),
+        aiohttp.ClientPayloadError("truncated"),
+    ],
+)
+async def test_forwarder_mid_request_error_is_not_retried(mid_request_exc: Exception) -> None:
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    session = _StubSession([mid_request_exc, 202, 202])
+    fwd = HermesForwarder(
+        session,  # type: ignore[arg-type]
+        ROUTE_SECRET,
+        "http://127.0.0.1:8644/webhooks/pebble",
+        clock=lambda: 1700000300.0,
+        sleep=fake_sleep,
+    )
+    with pytest.raises(AdapterError) as exc:
+        await fwd.send({"transcript": "x"}, "d-mid")
+    assert exc.value.status == 502
+    assert len(session.calls) == 1
+    assert sleeps == []
 
 
 # ---------------------------------------------------------------------------
